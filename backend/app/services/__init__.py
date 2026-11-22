@@ -11,6 +11,7 @@ from app.services.out_of_order import OutOfOrderService
 from app.services.sink_writer import SinkWriterService
 from app.services.lag_monitor import LagMonitorService
 from app.services.ddl_handle import DdlHandleService
+from app.services.ddl_batch import DdlBatchService
 from app.services.checkpoint import CheckpointService
 from app.services.schema_evo import SchemaEvoService
 from app.services.dedup_stream import DedupStreamService
@@ -35,6 +36,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "sink_writer": SinkWriterService(),
     "lag_monitor": LagMonitorService(),
     "ddl_handle": DdlHandleService(),
+    "ddl_batch": DdlBatchService(),
     "checkpoint": CheckpointService(),
     "schema_evo": SchemaEvoService(),
     "dedup_stream": DedupStreamService(),

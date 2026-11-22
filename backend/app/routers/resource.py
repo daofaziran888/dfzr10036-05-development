@@ -1,4 +1,8 @@
-"""统一资源接口：查询、导出、登记和动作按模块 key 分派到领域服务。"""
+"""统一资源接口：查询、导出、登记和动作按模块 key 分派到领域服务。
+
+跨模块编排流端点必须声明在 /api/{module}/{entry_id} 之前，否则 /api/flows/list
+会被动态路径当成 entry_id 解析而返回 422。
+"""
 from __future__ import annotations
 
 import csv
@@ -19,6 +23,79 @@ def require_service(module: str):
     if service is None:
         raise HTTPException(status_code=404, detail=f"未知业务模块：{module}")
     return service
+
+
+# ---- 跨模块编排流端点 ----
+
+@router.post("/flows/cdc-to-lake")
+def trigger_flow_cdc_to_lake(cdc_entry_id: int) -> dict[str, Any]:
+    """主线链路: CDC源端 -> Binlog解析 -> 事件转换 -> 维表关联 -> 水位 -> 落盘 -> 湖仓提交 -> 小文件合并"""
+    from app.services.orchestrator import flow_cdc_to_lake
+    return flow_cdc_to_lake(cdc_entry_id)
+
+
+@router.post("/flows/lag-recovery")
+def trigger_flow_lag_recovery(cdc_entry_id: int = 1) -> dict[str, Any]:
+    """主线链路: 乱序处理 -> 延迟监控 -> 断点恢复 -> 回填"""
+    from app.services.orchestrator import flow_lag_recovery
+    return flow_lag_recovery(cdc_entry_id)
+
+
+@router.post("/flows/ddl-propagation")
+def trigger_flow_ddl_propagation(ddl_entry_id: int) -> dict[str, Any]:
+    """主线链路: DDL适配 -> Binlog调整 -> Schema演进"""
+    from app.services.orchestrator import flow_ddl_propagation
+    return flow_ddl_propagation(ddl_entry_id)
+
+
+@router.post("/flows/commit-failure-recovery")
+def trigger_flow_commit_failure_recovery(commit_entry_id: int) -> dict[str, Any]:
+    """主线链路: Iceberg提交冲突 -> 数据比对 -> 告警 -> 回填修复"""
+    from app.services.orchestrator import flow_commit_failure_recovery
+    return flow_commit_failure_recovery(commit_entry_id)
+
+
+@router.post("/flows/cache-invalidation")
+def trigger_flow_cache_invalidation(dim_entry_id: int) -> dict[str, Any]:
+    """主线链路: 维表缓存失效 -> 告警 -> 延迟指标"""
+    from app.services.orchestrator import flow_cache_invalidation
+    return flow_cache_invalidation(dim_entry_id)
+
+
+@router.post("/flows/out-of-order-to-checkpoint")
+def trigger_flow_out_of_order_to_checkpoint(ooo_entry_id: int) -> dict[str, Any]:
+    """主线链路: 乱序超窗口 -> checkpoint保底 + 告警"""
+    from app.services.orchestrator import flow_out_of_order_to_checkpoint
+    return flow_out_of_order_to_checkpoint(ooo_entry_id)
+
+
+@router.post("/flows/rate-propagation")
+def trigger_flow_rate_propagation() -> dict[str, Any]:
+    """主线链路: 解析速率下降 -> 事件过载 -> 延迟上升"""
+    from app.services.orchestrator import flow_rate_propagation
+    return flow_rate_propagation()
+
+
+@router.post("/flows/sink-block-to-compaction")
+def trigger_flow_sink_block_to_compaction(sink_entry_id: int) -> dict[str, Any]:
+    """主线链路: 落盘阻塞 -> 小文件合并清理"""
+    from app.services.orchestrator import flow_sink_block_to_compaction
+    return flow_sink_block_to_compaction(sink_entry_id)
+
+
+@router.post("/flows/ddl-batch")
+def trigger_flow_ddl_batch(batch_no: str, action: str = "publish",
+                           positions: str | None = None) -> dict[str, Any]:
+    """主线链路: DDL批次批量校验 -> 按位点发布 -> 演进批次确认 -> 解析转换可消费映射"""
+    from app.services.orchestrator import flow_ddl_batch
+    return flow_ddl_batch(batch_no, action, positions)
+
+
+@router.get("/flows/list")
+def list_flows() -> dict[str, Any]:
+    """列出所有可编排流链路"""
+    from app.services.orchestrator import FLOWS
+    return {"flows": list(FLOWS.keys()), "count": len(FLOWS)}
 
 
 @router.get("/{module}", response_model=PageResult[dict])
@@ -96,68 +173,3 @@ def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResu
     service = require_service(module)
     entry, message = service.run_action(entry_id, payload.action.strip())
     return ActionResult(ok=entry is not None, message=message, entry=entry)
-
-
-# ---- 跨模块编排流端点 ----
-
-@router.post("/flows/cdc-to-lake")
-def trigger_flow_cdc_to_lake(cdc_entry_id: int) -> dict[str, Any]:
-    """主线链路: CDC源端 -> Binlog解析 -> 事件转换 -> 维表关联 -> 水位 -> 落盘 -> 湖仓提交 -> 小文件合并"""
-    from app.services.orchestrator import flow_cdc_to_lake
-    return flow_cdc_to_lake(cdc_entry_id)
-
-
-@router.post("/flows/lag-recovery")
-def trigger_flow_lag_recovery(cdc_entry_id: int = 1) -> dict[str, Any]:
-    """主线链路: 乱序处理 -> 延迟监控 -> 断点恢复 -> 回填"""
-    from app.services.orchestrator import flow_lag_recovery
-    return flow_lag_recovery(cdc_entry_id)
-
-
-@router.post("/flows/ddl-propagation")
-def trigger_flow_ddl_propagation(ddl_entry_id: int) -> dict[str, Any]:
-    """主线链路: DDL适配 -> Binlog调整 -> Schema演进"""
-    from app.services.orchestrator import flow_ddl_propagation
-    return flow_ddl_propagation(ddl_entry_id)
-
-
-@router.post("/flows/commit-failure-recovery")
-def trigger_flow_commit_failure_recovery(commit_entry_id: int) -> dict[str, Any]:
-    """主线链路: Iceberg提交冲突 -> 数据比对 -> 告警 -> 回填修复"""
-    from app.services.orchestrator import flow_commit_failure_recovery
-    return flow_commit_failure_recovery(commit_entry_id)
-
-
-@router.post("/flows/cache-invalidation")
-def trigger_flow_cache_invalidation(dim_entry_id: int) -> dict[str, Any]:
-    """主线链路: 维表缓存失效 -> 告警 -> 延迟指标"""
-    from app.services.orchestrator import flow_cache_invalidation
-    return flow_cache_invalidation(dim_entry_id)
-
-
-@router.post("/flows/out-of-order-to-checkpoint")
-def trigger_flow_out_of_order_to_checkpoint(ooo_entry_id: int) -> dict[str, Any]:
-    """主线链路: 乱序超窗口 -> checkpoint保底 + 告警"""
-    from app.services.orchestrator import flow_out_of_order_to_checkpoint
-    return flow_out_of_order_to_checkpoint(ooo_entry_id)
-
-
-@router.post("/flows/rate-propagation")
-def trigger_flow_rate_propagation() -> dict[str, Any]:
-    """主线链路: 解析速率下降 -> 事件过载 -> 延迟上升"""
-    from app.services.orchestrator import flow_rate_propagation
-    return flow_rate_propagation()
-
-
-@router.post("/flows/sink-block-to-compaction")
-def trigger_flow_sink_block_to_compaction(sink_entry_id: int) -> dict[str, Any]:
-    """主线链路: 落盘阻塞 -> 小文件合并清理"""
-    from app.services.orchestrator import flow_sink_block_to_compaction
-    return flow_sink_block_to_compaction(sink_entry_id)
-
-
-@router.get("/flows/list")
-def list_flows() -> dict[str, Any]:
-    """列出所有可编排流链路"""
-    from app.services.orchestrator import FLOWS
-    return {"flows": list(FLOWS.keys()), "count": len(FLOWS)}

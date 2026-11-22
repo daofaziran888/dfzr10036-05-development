@@ -59,6 +59,7 @@ npm run dev
 | 结果落盘 | `sink_writer` | 落盘管道 | 管道编号、数据流、目标载体 |
 | 延迟监控 | `lag_monitor` | 延迟指标 | 指标编号、数据流、源端位点 |
 | DDL处理 | `ddl_handle` | DDL适配 | 适配编号、源端、DDL类型 |
+| DDL批次 | `ddl_batch` | DDL批次 | 批次编号、源端、DDL条数、校验结果、发布进度 |
 | 断点恢复 | `checkpoint` | 检查点 | 检查点编号、数据流、保存位点 |
 | Schema演进 | `schema_evo` | 演进记录 | 记录编号、数据流、变更列 |
 | 流去重 | `dedup_stream` | 去重窗口 | 窗口编号、数据流、去重键 |
@@ -72,6 +73,37 @@ npm run dev
 | 编排调度 | `task_schedule` | 调度计划 | 计划编号、关联链路、Cron表达式 |
 | 流审计 | `stream_audit` | 审计记录 | 记录编号、数据流、操作类型 |
 | 健康报告 | `stream_health` | 健康评估 | 评估编号、数据流、健康分数 |
+
+## DDL 批次：批量校验、按位点发布、演进批次确认
+
+- `POST /api/ddl-batch/submit`：一次提交带 `日志位点` 的 DDL 批次（`changes[]`），
+  立即做批量校验，**不自动发布**。可用 `发布故障位点` / `校验故障位点` 复现故障窗口。
+- `POST /api/ddl-batch/publish`：按位点顺序发布；同一张表前序位点未确认时拒绝跳级；
+  故障位点中断后续发布，但其他独立表仍可判定受理。
+- `POST /api/ddl-batch/redo`：故障恢复后补做（重新校验失败位点再继续发布）。
+- `POST /api/ddl-batch/recover`：只恢复故障标记，不自动发布。
+- `GET /api/ddl-batch/acceptance`：只读受理判定，不改任何状态。
+- 发布确认会生成 `schema_evo` 中 `记录类型=演进批次确认` 的记录，
+  可经 `GET /api/schema_evo/confirmations/{批次号}` 查询。
+- 记列版本账本按 `(表, 日志位点)` 幂等：补做、重复提交原批都只记一次，
+  已确认变更的列版本和首次可消费时间保持不变。
+
+解析转换入口（`binlog_parse -> event_trans`）：
+
+- `POST /api/events/parse-convert`：`{batch_no, table, data, event_id?}`。从演进批次确认记录
+  选可消费字段映射，事件转换保存「所用列版本」和「实际产出行」。
+- `GET /api/events/results` / `GET /api/events/pending`：查询转换结果与待发布记录。
+  映射未确认时事件保持待发布、可查询可续处理；只带基线列的旧事件继续用旧映射（v1）解释。
+- `POST /api/events/reflow`：按当前确认映射重新消费某表的待发布记录。
+
+## 测试
+
+```bash
+cd backend && .venv/bin/python -m unittest discover -s tests -t .
+```
+
+覆盖批次提交/批量校验、同表不跳级、故障窗口的独立受理判定、补做与重复提交的幂等记账，
+以及事件转换的待发布记录、旧映射解释和列版本留存。
 
 ## 约定
 

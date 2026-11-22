@@ -244,3 +244,56 @@ FLOWS: dict[str, Any] = {
     "rate_propagation": flow_rate_propagation,
     "sink_block_to_compaction": flow_sink_block_to_compaction,
 }
+
+# ---- DDL 批次：批量校验 -> 按位点发布 -> 演进批次确认 ----
+
+def flow_ddl_batch(batch_no: str, action: str = "publish",
+                   positions: str | None = None) -> dict[str, Any]:
+    """主线链路9: DDL批次批量校验/发布/补做，确认后生成演进批次确认记录。
+
+    调用数: 3+
+    """
+    from app.services.ddl_batch import DdlBatchService
+    from app.services.schema_evo import SchemaEvoService
+
+    batch_service = DdlBatchService()
+    batch = batch_service.find_by_no(batch_no)
+    if batch is None:
+        return {"ok": False, "step": "ddl_batch", "message": "DDL批次不存在"}
+
+    wanted = None
+    if positions:
+        wanted = [int(item) for item in positions.replace("，", ",").split(",") if item.strip()]
+    trace: list[str] = []
+    name = action.strip()
+    if name in ("validate", "校验", "提交校验"):
+        batch_service.validate_batch(batch)
+        trace.append(f"ddl_batch#{batch_no} -> 批量校验 {batch.get('校验结果')}")
+    elif name in ("redo", "补做", "补做发布"):
+        result = batch_service.redo_batch(batch, wanted)
+        trace.append(f"ddl_batch#{batch_no} -> 补做 {batch.get('发布进度')}")
+        if result.get("confirmation"):
+            trace.append(f"ddl_batch#{batch_no} -> schema_evo#"
+                         f"{result['confirmation'].get('id')}(演进批次确认)")
+    elif name in ("recover", "恢复故障", "恢复发布"):
+        result = batch_service.recover_batch(batch, wanted)
+        trace.append(f"ddl_batch#{batch_no} -> 恢复位点 {result['recovered']}")
+    else:
+        result = batch_service.publish_batch(batch, positions=wanted)
+        trace.append(f"ddl_batch#{batch_no} -> 发布 {batch.get('发布进度')}")
+        if result.get("confirmation"):
+            trace.append(f"ddl_batch#{batch_no} -> schema_evo#"
+                         f"{result['confirmation'].get('id')}(演进批次确认)")
+    confirmation = SchemaEvoService().confirmation_for_batch(batch_no)
+    return {
+        "ok": True,
+        "batch": batch,
+        "confirmation": confirmation,
+        "acceptance": batch_service.acceptance(batch),
+        "trace": trace,
+        "call_count": len(trace),
+    }
+
+
+FLOWS["ddl_batch"] = flow_ddl_batch
+FLOWS["ddl_batch_publish"] = flow_ddl_batch

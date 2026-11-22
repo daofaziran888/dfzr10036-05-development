@@ -214,6 +214,8 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
             "合并耗时": "进行中...", "释放空间": "预估1.2GB",
         },
     ],
+    # DDL批次由 /api/ddl-batch/submit 动态生成；这里只占位，保证模块可查询。
+    "ddl_batch": [],
     "ddl_handle": [
         {
             "id": 1, "status": "已应用", "pending": True, "abnormal": False,
